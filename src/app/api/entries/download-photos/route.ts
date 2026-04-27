@@ -8,8 +8,9 @@ import { zipSync } from "fflate";
 
 const UPLOAD_DIR = join(process.cwd(), "uploads");
 
-/** 사진 파일 읽기 — blur=true면 _blur 버전 우선, 없으면 원본 폴백 */
-async function readPhoto(url: string, blur: boolean): Promise<{ data: Uint8Array; ext: string } | null> {
+/** 사진 파일 읽기 — blur=true면 _blur 버전 우선, 없으면 원본 폴백.
+ *  isBlurred = true면 _blur 파일이 실제로 사용됨 (얼굴 감지된 사진) */
+async function readPhoto(url: string, blur: boolean): Promise<{ data: Uint8Array; ext: string; isBlurred: boolean } | null> {
   const relPath = url.replace("/api/uploads/", "");
   const filePath = join(UPLOAD_DIR, ...relPath.split("/"));
   const ext = filePath.split(".").pop() || "jpg";
@@ -18,7 +19,7 @@ async function readPhoto(url: string, blur: boolean): Promise<{ data: Uint8Array
     const blurPath = filePath.replace(`.${ext}`, `_blur.${ext}`);
     try {
       const data = await readFile(blurPath);
-      return { data: new Uint8Array(data), ext };
+      return { data: new Uint8Array(data), ext, isBlurred: true };
     } catch {
       // _blur 파일 없으면 원본 폴백
     }
@@ -26,7 +27,7 @@ async function readPhoto(url: string, blur: boolean): Promise<{ data: Uint8Array
 
   try {
     const data = await readFile(filePath);
-    return { data: new Uint8Array(data), ext };
+    return { data: new Uint8Array(data), ext, isBlurred: false };
   } catch {
     return null;
   }
@@ -162,6 +163,8 @@ export async function GET(request: Request) {
     csvRows.push(["연번", "일시", "카테고리", "위치", "구역", "사진수", "메모", "담당"].map(csvCell).join(","));
 
     const htmlCards: string[] = [];
+    let totalPhotoCount = 0;
+    let blurredPhotoCount = 0;
 
     let seq = 1;
     for (const entry of targets) {
@@ -200,15 +203,20 @@ export async function GET(request: Request) {
         entry.userName,
       ].map(csvCell).join(","));
 
-      // 사진 (1.jpg, 2.jpg ...) + HTML용 상대 경로 수집
-      const photoRelPaths: string[] = [];
+      // 사진 (1.jpg, 2.jpg ...) + HTML용 상대 경로 + 블러 여부 수집
+      const photoRelPaths: { path: string; isBlurred: boolean }[] = [];
       let photoIdx = 1;
       for (const url of entry.photoUrls || []) {
         const photo = await readPhoto(url, useBlur);
         if (!photo) continue;
         const fileName = `${photoIdx}.${photo.ext}`;
         files[`${folderName}/${fileName}`] = photo.data;
-        photoRelPaths.push(`${encodeURIComponent(folderName)}/${encodeURIComponent(fileName)}`);
+        photoRelPaths.push({
+          path: `${encodeURIComponent(folderName)}/${encodeURIComponent(fileName)}`,
+          isBlurred: photo.isBlurred,
+        });
+        totalPhotoCount++;
+        if (photo.isBlurred) blurredPhotoCount++;
         photoIdx++;
       }
 
@@ -224,7 +232,7 @@ export async function GET(request: Request) {
       const photoLinksHtml = photoRelPaths
         .map(
           (p) =>
-            `<a href="${p}" target="_blank"><img src="${p}" loading="lazy" alt=""></a>`
+            `<a href="${p.path}" target="_blank"${p.isBlurred ? ' class="blurred" title="얼굴 감지·블러 처리됨"' : ""}><img src="${p.path}" loading="lazy" alt=""></a>`
         )
         .join("");
 
@@ -271,9 +279,21 @@ export async function GET(request: Request) {
   .card .meta .memo { display: block; margin-top: 4px; }
   .card .meta .memo-body { white-space: pre-wrap; word-break: break-word; color: #374151; }
   .card .photos { flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; min-width: 0; }
-  .card .photos a { display: block; aspect-ratio: 1; overflow: hidden; border-radius: 8px; background: #f3f4f6; border: 1px solid #e5e7eb; }
+  .card .photos a { display: block; aspect-ratio: 1; overflow: hidden; border-radius: 8px; background: #f3f4f6; border: 1px solid #e5e7eb; position: relative; }
   .card .photos img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.2s; }
   .card .photos a:hover img { transform: scale(1.05); }
+  /* 블러 처리된 사진 — 주황 테두리 + 좌상단 배지로 식별 */
+  .card .photos a.blurred { border: 3px solid #f59e0b; box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25); }
+  .card .photos a.blurred::before {
+    content: "🔒 블러";
+    position: absolute; top: 6px; left: 6px; z-index: 1;
+    background: #f59e0b; color: white;
+    font-size: 11px; font-weight: 700;
+    padding: 3px 8px; border-radius: 4px;
+    letter-spacing: 0.5px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    pointer-events: none;
+  }
   .copy { margin-top: 10px; background: #4f46e5; color: white; border: none; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 500; }
   .copy:hover { background: #4338ca; }
   .copy.done { background: #059669; }
@@ -284,8 +304,8 @@ export async function GET(request: Request) {
 </style>
 </head>
 <body>
-<h1>환경순찰 ${date} 미리보기 <span class="cnt">총 ${targets.length}건</span></h1>
-<div class="hint">사진 클릭 → 원본 열림 · "복사" 버튼 → 일시/위치/메모 클립보드 복사 → hwpx 셀에 붙여넣기</div>
+<h1>환경순찰 ${date} 미리보기 <span class="cnt">총 ${targets.length}건 · 사진 ${totalPhotoCount}장${blurredPhotoCount > 0 ? ` (🔒 블러 ${blurredPhotoCount}장)` : ""}</span></h1>
+<div class="hint">사진 클릭 → 원본 열림 · "복사" 버튼 → 일시/위치/메모 클립보드 복사 → hwpx 셀에 붙여넣기${blurredPhotoCount > 0 ? ` · <span style="color:#d97706;font-weight:600;">🔒 주황 테두리 = 얼굴 감지·블러 처리됨</span>` : ""}</div>
 ${htmlCards.join("\n")}
 <script>
 document.querySelectorAll('.copy').forEach(function(btn){

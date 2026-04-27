@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS "patrol_entries" (
   "userId"            TEXT NOT NULL REFERENCES "users"("id"),
   "category"          TEXT NOT NULL,
   "evalItem"          TEXT,
-  "evalPoints"        INTEGER,
+  "evalPoints"        NUMERIC(5,2),
   "latitude"          DOUBLE PRECISION,
   "longitude"         DOUBLE PRECISION,
   "address"           TEXT,

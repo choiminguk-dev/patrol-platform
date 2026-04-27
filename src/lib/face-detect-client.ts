@@ -147,14 +147,12 @@ export async function applyBlurOnDevice(
 
 /**
  * 박스 내부 픽셀 샘플링 → 한국인 피부톤(HSV) 비율 계산.
- * CCTV·주소판·건물·도로 등 false positive 강력 차단 (살색 거의 0%).
+ * CCTV·주소판·건물·갈색 벽돌·콘크리트 등 false positive 강력 차단.
  *
- * 살색 범위 (한국인 평균):
- *   H: 0~50 도
- *   S: 0.15~0.85
- *   V: 0.4~0.95
- *
- * 30% 이상이면 얼굴 가능성 인정.
+ * 살색 범위 (좁혀진 한국인 피부톤):
+ *   H: 5~40 도   (붉은 벽돌·짙은 갈색 제외)
+ *   S: 0.20~0.75 (회색·짙은 갈색 제외)
+ *   V: 0.45~0.92 (그늘 어두운 톤·과노출 제외)
  */
 function skinRatioInBox(
   source: HTMLCanvasElement,
@@ -188,15 +186,16 @@ function skinRatioInBox(
       else h = ((r - g) / (max - min)) * 60 + 240;
     }
     if (h < 0) h += 360;
-    const isSkin = h >= 0 && h <= 50 && s >= 0.15 && s <= 0.85 && v >= 0.4 && v <= 0.95;
+    const isSkin = h >= 5 && h <= 40 && s >= 0.20 && s <= 0.75 && v >= 0.45 && v <= 0.92;
     if (isSkin) skin++;
     total++;
   }
   return total === 0 ? 0 : skin / total;
 }
 
-const SKIN_RATIO_THRESHOLD = 0.30;
-const MIN_CONFIDENCE = 0.55; // 0.25 → 0.55 (CCTV·주소판 false positive 대폭 감소)
+const SKIN_RATIO_THRESHOLD = 0.35;       // 전체 박스 살색 비율 임계 (0.30 → 0.35)
+const CENTER_SKIN_THRESHOLD = 0.30;      // 중심 50% sub-region 살색 비율 임계 (CCTV 렌즈 차단)
+const MIN_CONFIDENCE = 0.55;             // face-api 신뢰도 임계
 
 /**
  * Blob/File에서 얼굴 감지 → 퍼센트 좌표 배열 반환
@@ -250,9 +249,17 @@ export async function detectFaces(imageBlob: Blob): Promise<FaceBBox[]> {
       // 면적 30% 이상 = 오감지 (손가락/렌즈 가림)
       if ((f.w * f.h) / 10000 >= 0.3) continue;
 
-      // 살색 비율 검증 — CCTV·주소판·건물 차단
+      // 살색 비율 검증 — 전체 박스 + 중심부 50% 별도
+      // 얼굴은 중심에 코·입(살색 농도 ↑), CCTV는 중심에 렌즈(검정·살색 ↓)
       const skinRatio = skinRatioInBox(canvas, d.box);
-      if (skinRatio < SKIN_RATIO_THRESHOLD) {
+      const centerBox = {
+        x: d.box.x + d.box.width * 0.25,
+        y: d.box.y + d.box.height * 0.25,
+        width: d.box.width * 0.5,
+        height: d.box.height * 0.5,
+      };
+      const centerSkin = skinRatioInBox(canvas, centerBox);
+      if (skinRatio < SKIN_RATIO_THRESHOLD || centerSkin < CENTER_SKIN_THRESHOLD) {
         rejectedBySkin++;
         continue;
       }

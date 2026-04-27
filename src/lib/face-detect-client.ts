@@ -146,9 +146,66 @@ export async function applyBlurOnDevice(
 }
 
 /**
+ * 박스 내부 픽셀 샘플링 → 한국인 피부톤(HSV) 비율 계산.
+ * CCTV·주소판·건물·도로 등 false positive 강력 차단 (살색 거의 0%).
+ *
+ * 살색 범위 (한국인 평균):
+ *   H: 0~50 도
+ *   S: 0.15~0.85
+ *   V: 0.4~0.95
+ *
+ * 30% 이상이면 얼굴 가능성 인정.
+ */
+function skinRatioInBox(
+  source: HTMLCanvasElement,
+  box: { x: number; y: number; width: number; height: number }
+): number {
+  const sample = 32;
+  const cv = document.createElement("canvas");
+  cv.width = sample;
+  cv.height = sample;
+  const cx = cv.getContext("2d");
+  if (!cx) return 0;
+  try {
+    cx.drawImage(source, box.x, box.y, box.width, box.height, 0, 0, sample, sample);
+  } catch {
+    return 0;
+  }
+  const data = cx.getImageData(0, 0, sample, sample).data;
+
+  let skin = 0;
+  let total = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const v = max / 255;
+    const s = max === 0 ? 0 : (max - min) / max;
+    let h = 0;
+    if (max !== min) {
+      if (max === r) h = ((g - b) / (max - min)) * 60;
+      else if (max === g) h = ((b - r) / (max - min)) * 60 + 120;
+      else h = ((r - g) / (max - min)) * 60 + 240;
+    }
+    if (h < 0) h += 360;
+    const isSkin = h >= 0 && h <= 50 && s >= 0.15 && s <= 0.85 && v >= 0.4 && v <= 0.95;
+    if (isSkin) skin++;
+    total++;
+  }
+  return total === 0 ? 0 : skin / total;
+}
+
+const SKIN_RATIO_THRESHOLD = 0.30;
+const MIN_CONFIDENCE = 0.55; // 0.25 → 0.55 (CCTV·주소판 false positive 대폭 감소)
+
+/**
  * Blob/File에서 얼굴 감지 → 퍼센트 좌표 배열 반환
  * - 사용자 기기에서 100% 로컬 실행
  * - 감지 실패 시 빈 배열 반환 (에러 무시)
+ *
+ * 2단계 필터:
+ *   1) face-api 신뢰도 ≥ 0.55
+ *   2) 박스 내부 살색 비율 ≥ 30% (CCTV·주소판·건물 거부)
  */
 export async function detectFaces(imageBlob: Blob): Promise<FaceBBox[]> {
   try {
@@ -173,8 +230,8 @@ export async function detectFaces(imageBlob: Blob): Promise<FaceBBox[]> {
 
     // SSD + TinyFaceDetector 이중 감지 → 합집합 (옆모습 감지율 향상)
     const [ssdDets, tinyDets] = await Promise.all([
-      faceapi.detectAllFaces(canvas, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.25 })),
-      faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 608, scoreThreshold: 0.25 })),
+      faceapi.detectAllFaces(canvas, new faceapi.SsdMobilenetv1Options({ minConfidence: MIN_CONFIDENCE })),
+      faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 608, scoreThreshold: MIN_CONFIDENCE })),
     ]);
 
     // 두 모델 결과 합치기 (중복 영역은 하나만 유지)
@@ -187,10 +244,19 @@ export async function detectFaces(imageBlob: Blob): Promise<FaceBBox[]> {
     });
 
     const merged: FaceBBox[] = [];
+    let rejectedBySkin = 0;
     for (const d of allDets) {
       const f = toPct(d);
       // 면적 30% 이상 = 오감지 (손가락/렌즈 가림)
       if ((f.w * f.h) / 10000 >= 0.3) continue;
+
+      // 살색 비율 검증 — CCTV·주소판·건물 차단
+      const skinRatio = skinRatioInBox(canvas, d.box);
+      if (skinRatio < SKIN_RATIO_THRESHOLD) {
+        rejectedBySkin++;
+        continue;
+      }
+
       // 기존 감지와 50% 이상 겹치면 중복 → 스킵
       const overlap = merged.some((m) => {
         const ox = Math.max(0, Math.min(m.x + m.w, f.x + f.w) - Math.max(m.x, f.x));
@@ -200,6 +266,10 @@ export async function detectFaces(imageBlob: Blob): Promise<FaceBBox[]> {
         return smaller > 0 && inter / smaller > 0.5;
       });
       if (!overlap) merged.push(f);
+    }
+
+    if (rejectedBySkin > 0) {
+      console.log(`[face-detect] 살색 검증 ${rejectedBySkin}건 거부 (CCTV·주소판·건물 등)`);
     }
 
     return merged;

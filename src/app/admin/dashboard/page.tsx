@@ -14,10 +14,25 @@ const KST_TIME_FMT = new Intl.DateTimeFormat("en-GB", {
   hour12: false,
 });
 
+const KST_DATE_TIME_SHORT = new Intl.DateTimeFormat("ko-KR", {
+  timeZone: "Asia/Seoul",
+  month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit",
+  hour12: false,
+});
+
 /** UTC ISO → KST HH:MM:SS */
 function fmtKstTime(isoStr: string | null | undefined): string {
   if (!isoStr) return "";
   return KST_TIME_FMT.format(new Date(isoStr));
+}
+
+/** UTC ISO → KST "MM.DD. HH:MM" (구조화 뷰 카드 헤더용 짧은 포맷) */
+function fmtKstShort(isoStr: string | null | undefined): string {
+  if (!isoStr) return "";
+  return KST_DATE_TIME_SHORT.format(new Date(isoStr))
+    .replace(/\s/g, "")
+    .replace(/(\d{2})\.(\d{2})\.(\d{2}):(\d{2})/, "$1.$2. $3:$4");
 }
 
 interface EvalItem {
@@ -89,6 +104,7 @@ interface DateEntries {
     id: string;
     userId: string;
     category: string;
+    photoUrls: string[];
     photoCount: number;
     quantity: number;
     unit: string;
@@ -129,6 +145,8 @@ export default function DashboardPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showCalendar, setShowCalendar] = useState(false);
   const [moveDate, setMoveDate] = useState<string | null>(null); // 날짜 이동 모드
+  // 보기 모드: 구조화(보고서/일지 카드) 기본 / 목록(연번 단순 나열)
+  const [viewMode, setViewMode] = useState<"structured" | "list">("structured");
   const calRef = useRef<HTMLDivElement>(null);
   const entriesRef = useRef<HTMLDivElement>(null);
 
@@ -604,7 +622,151 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* 입력 목록 — 연번 부여 (다운로드 파일명과 일치) */}
+            {/* 보기 방식 토글 — 구조화(일지/보고서 카드) / 목록 */}
+            <div className="flex bg-gray-100 rounded-lg p-1 mb-3 max-w-[280px]">
+              <button
+                onClick={() => setViewMode("structured")}
+                className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  viewMode === "structured" ? "bg-white text-emerald-700 shadow-sm" : "text-gray-500"
+                }`}
+              >
+                📋 구조화
+              </button>
+              <button
+                onClick={() => setViewMode("list")}
+                className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  viewMode === "list" ? "bg-white text-emerald-700 shadow-sm" : "text-gray-500"
+                }`}
+              >
+                ☰ 목록
+              </button>
+            </div>
+
+            {/* 구조화 뷰 — 좌측 메타 + 우측 사진 그리드 */}
+            {viewMode === "structured" && (
+              <div className="space-y-3">
+                {dateEntries.entries.map((e, listIdx) => {
+                  const seq = listIdx + 1;
+                  const canSelect = me?.role === "ADMIN" || e.userId === me?.id;
+                  const isChecked = selectedIds.includes(e.id);
+                  const catLabel = CATEGORY_MAP[e.category]?.label || e.category;
+                  const loc = e.addressText || e.address ||
+                    (e.latitude != null && e.longitude != null
+                      ? `${e.latitude.toFixed(5)}, ${e.longitude.toFixed(5)}`
+                      : null);
+                  const copyText = [
+                    `${seq} · ${fmtKstShort(e.createdAt)}`,
+                    loc || "(미입력)",
+                    `${catLabel} · 사진 ${e.photoCount}장`,
+                    e.memo ? `메모: ${e.memo}` : null,
+                  ].filter(Boolean).join("\n");
+
+                  function toggleSelect() {
+                    if (!canSelect) return;
+                    if (!selecting) setSelecting(true);
+                    setSelectedIds((prev) =>
+                      prev.includes(e.id) ? prev.filter((x) => x !== e.id) : [...prev, e.id]
+                    );
+                  }
+
+                  return (
+                    <article
+                      key={e.id}
+                      className={`bg-white rounded-xl border p-4 flex flex-col md:flex-row gap-4 items-start ${
+                        isChecked ? "border-blue-500 ring-2 ring-blue-200" : "border-gray-200"
+                      }`}
+                    >
+                      {/* 좌측: 메타 — 박스 자체가 상세 진입 */}
+                      <div
+                        className="md:flex-none md:w-[280px] w-full text-sm leading-relaxed min-w-0 cursor-pointer"
+                        onClick={(ev) => {
+                          const t = ev.target as HTMLElement;
+                          if (t.closest("button, input, select, a")) return;
+                          if (selecting) toggleSelect();
+                          else openDetail(e.id);
+                        }}
+                        title={selecting ? "클릭하면 선택/해제" : "클릭하면 상세보기"}
+                      >
+                        <div className="text-base font-semibold text-emerald-800 mb-1.5 flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={(ev) => { ev.stopPropagation(); toggleSelect(); }}
+                            disabled={!canSelect}
+                            className={`px-2 py-0.5 rounded text-xs font-bold transition-colors ${
+                              isChecked
+                                ? "bg-blue-600 text-white"
+                                : "bg-emerald-700 text-white hover:bg-emerald-600"
+                            } disabled:opacity-50`}
+                            title={canSelect ? "클릭하면 선택/해제 (다중 선택 가능)" : "권한 없음"}
+                          >
+                            {isChecked ? "✓" : seq}
+                          </button>
+                          <span>{fmtKstShort(e.createdAt)}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-normal ${
+                            e.inputTrack === "batch" ? "bg-blue-100 text-blue-600" : "bg-emerald-100 text-emerald-600"
+                          }`}>
+                            {e.inputTrack === "batch" ? "일괄" : "실시간"}
+                          </span>
+                        </div>
+                        <div className="text-[13px] space-y-0.5">
+                          <div>
+                            <span className="text-gray-400 inline-block w-10 mr-1 text-[11px]">위치</span>
+                            <span className="text-gray-700">{loc || "(미입력)"}</span>
+                          </div>
+                          <div>
+                            <span className="text-gray-400 inline-block w-10 mr-1 text-[11px]">분류</span>
+                            <span className="text-gray-700">{catLabel} · 사진 {e.photoCount}장</span>
+                          </div>
+                          <div>
+                            <span className="text-gray-400 inline-block w-10 mr-1 text-[11px]">담당</span>
+                            <span className="text-gray-700">{e.userName}</span>
+                          </div>
+                          {e.memo && (
+                            <div className="mt-1.5">
+                              <span className="text-gray-400 inline-block w-10 mr-1 text-[11px]">메모</span>
+                              <span className="text-gray-700 whitespace-pre-wrap break-words text-[12px]">{e.memo}</span>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            navigator.clipboard?.writeText(copyText).catch(() => {});
+                          }}
+                          className="mt-2 inline-flex items-center gap-1 text-[11px] text-indigo-600 hover:text-indigo-800"
+                          title="이 항목 메타데이터를 클립보드에 복사"
+                        >
+                          📋 복사
+                        </button>
+                      </div>
+                      {/* 우측: 사진 그리드 */}
+                      <div className="flex-1 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-4 lg:grid-cols-5 gap-2 min-w-0 w-full">
+                        {(e.photoUrls || []).map((url, i) => (
+                          <a
+                            key={i}
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block aspect-square rounded-lg overflow-hidden bg-gray-100 border border-gray-200 hover:border-emerald-400 transition-colors"
+                            title="클릭하면 새 창에서 원본 보기"
+                          >
+                            <img
+                              src={url}
+                              alt=""
+                              loading="lazy"
+                              className="w-full h-full object-cover hover:scale-105 transition-transform duration-200"
+                            />
+                          </a>
+                        ))}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* 목록 뷰 — 단순 한 줄 카드 */}
+            {viewMode === "list" && (
             <div className="space-y-2">
               {dateEntries.entries.map((e, listIdx) => {
                 const canSelect = me?.role === "ADMIN" || e.userId === me?.id;
@@ -655,6 +817,7 @@ export default function DashboardPage() {
                 );
               })}
             </div>
+            )}
 
             {/* 전체 선택/해제 */}
             {selecting && dateEntries.entries.length > 1 && (

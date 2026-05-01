@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { todayKr } from "@/lib/date";
-import EntryMapView, { type EntryForMap } from "@/components/entry-map-view";
 
 interface Doc {
   id: string;
@@ -51,13 +50,12 @@ function getMonthWeeks(year: number, month: number) {
 
 const DOC_TYPES = [
   { id: "field_log", label: "동 현장 점검 일지", desc: "일일 현장 점검 양식" },
-  { id: "daily_log", label: "일일 순찰일지", desc: "일별 순찰 활동 기록" },
   { id: "weekly_report", label: "주간 순찰보고", desc: "주간 순찰 종합 보고서" },
   { id: "quarter_package", label: "실적 종합보고", desc: "기간별 실적 종합 분석" },
 ];
 
 export default function DocsPage() {
-  const [docType, setDocType] = useState("daily_log");
+  const [docType, setDocType] = useState("field_log");
   const [startDate, setStartDate] = useState(todayKr());
   const [endDate, setEndDate] = useState(todayKr());
   const [generating, setGenerating] = useState(false);
@@ -65,17 +63,22 @@ export default function DocsPage() {
   const [history, setHistory] = useState<Doc[]>([]);
   const [viewDoc, setViewDoc] = useState<Doc | null>(null);
   const [error, setError] = useState("");
-  const [mapReview, setMapReview] = useState(false);
-  const [mapEntries, setMapEntries] = useState<EntryForMap[]>([]);
-  const [mapLoading, setMapLoading] = useState(false);
   const [dlStructured, setDlStructured] = useState(false);
 
   // 주차 탐색
   const todayDate = todayKr();
   const [weekYear, setWeekYear] = useState(parseInt(todayDate.slice(0, 4)));
   const [weekMonth, setWeekMonth] = useState(parseInt(todayDate.slice(5, 7)));
-  const [selectedWeek, setSelectedWeek] = useState<string | null>(null); // "start~end"
   const weeks = getMonthWeeks(weekYear, weekMonth);
+  // 오늘이 포함된 주차를 기본 선택 — 같은 월/년이면 자동 매칭, 다르면 null(전체)
+  const todayWeekKey = (() => {
+    const todayY = parseInt(todayDate.slice(0, 4));
+    const todayM = parseInt(todayDate.slice(5, 7));
+    if (todayY !== weekYear || todayM !== weekMonth) return null;
+    const w = weeks.find((wk) => todayDate >= wk.start && todayDate <= wk.end);
+    return w ? `${w.start}~${w.end}` : null;
+  })();
+  const [selectedWeek, setSelectedWeek] = useState<string | null>(todayWeekKey);
 
   function downloadCsv(start: string, end: string) {
     const a = document.createElement("a");
@@ -111,27 +114,6 @@ export default function DocsPage() {
   async function loadHistory() {
     const res = await fetch("/api/docs");
     if (res.ok) setHistory(await res.json());
-  }
-
-  async function openMapReview() {
-    setMapLoading(true);
-    setMapReview(true);
-    const allEntries: EntryForMap[] = [];
-    // 날짜 범위 순회 (by-date는 단일 날짜 API)
-    const start = new Date(startDate + "T12:00:00");
-    const end = new Date(endDate + "T12:00:00");
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const dateStr = d.toISOString().slice(0, 10);
-      try {
-        const res = await fetch(`/api/entries/by-date?date=${dateStr}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.entries) allEntries.push(...data.entries);
-        }
-      } catch { /* skip */ }
-    }
-    setMapEntries(allEntries);
-    setMapLoading(false);
   }
 
   async function handleGenerate() {
@@ -244,35 +226,6 @@ export default function DocsPage() {
     );
   }
 
-  // 지도 검토 모드
-  if (mapReview) {
-    return (
-      <div className="p-4 md:p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold text-gray-900">
-            🗺 지도 검토 ({startDate} ~ {endDate})
-          </h2>
-          <button onClick={() => setMapReview(false)} className="text-sm text-emerald-600">← 돌아가기</button>
-        </div>
-        <p className="text-xs text-gray-500">
-          마커를 클릭하면 주소를 수정할 수 있습니다. 수정 후 문서를 생성하면 정정된 주소가 반영됩니다.
-        </p>
-        {mapLoading ? (
-          <div className="bg-gray-50 border border-gray-200 rounded-lg h-96 flex items-center justify-center text-sm text-gray-500">
-            <div className="w-6 h-6 border-2 border-gray-300 border-t-emerald-600 rounded-full animate-spin mr-2" />
-            항목 로딩 중...
-          </div>
-        ) : (
-          <EntryMapView
-            entries={mapEntries}
-            onRefresh={openMapReview}
-            className="w-full h-[70vh]"
-          />
-        )}
-      </div>
-    );
-  }
-
   return (
     <div className="p-4 md:p-6 space-y-6">
       <h2 className="text-xl font-bold text-gray-900">문서 생성</h2>
@@ -307,16 +260,10 @@ export default function DocsPage() {
 
       {error && <p className="text-sm text-red-500">{error}</p>}
 
-      <div className="flex gap-3">
-        <button onClick={openMapReview}
-          className="flex-1 py-3 rounded-lg border-2 border-indigo-500 text-indigo-600 font-semibold hover:bg-indigo-50">
-          🗺 지도 검토
-        </button>
-        <button onClick={handleGenerate} disabled={generating}
-          className="flex-1 py-3 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">
-          {generating ? "AI 생성 중..." : "문서 생성"}
-        </button>
-      </div>
+      <button onClick={handleGenerate} disabled={generating}
+        className="w-full py-3 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">
+        {generating ? "AI 생성 중..." : "문서 생성"}
+      </button>
 
       {/* 주차별 폴더 + 생성 이력 */}
       <div>

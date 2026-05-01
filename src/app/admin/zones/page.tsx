@@ -57,7 +57,7 @@ export default function ZonesPage() {
   const [showForm, setShowForm] = useState(false);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [tab, setTab] = useState<string>("all");
-  const [view, setView] = useState<"list" | "map" | "daily">("list");
+  const [view, setView] = useState<"list" | "map" | "daily">("map");
   const [mapMarkers, setMapMarkers] = useState<MapMarker[]>([]);
   const [geocoding, setGeocoding] = useState(false);
   const [candMapAddress, setCandMapAddress] = useState<{ address: string; title: string } | null>(null);

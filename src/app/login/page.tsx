@@ -20,7 +20,6 @@ const ROLE_LABELS: Record<string, string> = {
   RESOURCE: "자원관리사",
 };
 
-// 적극행정용: 청소담당 + 안전담당만 표시
 const ALLOWED_IDS = ["me", "safety"];
 
 export default function LoginPage() {

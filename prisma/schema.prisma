@@ -1,0 +1,135 @@
+// 환경순찰 통합 플랫폼 — DB 스키마
+// 오케스트레이션 플랫폼 첫 모듈: 멀티테넌트 + 확장 대비
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===== 사용자 =====
+model User {
+  id        String   @id                  // 'me', 'pub1', 'keep1' 등
+  name      String
+  role      String                        // ADMIN, SAFETY, DRIVER, CHIEF, PUBLIC_WORKER, KEEPER, RESOURCE
+  pool      String?                       // PUB, KEEP, RES (풀 소속)
+  pinHash   String?                       // bcrypt 해시 (4자리 PIN)
+  isActive  Boolean  @default(true)
+  tenantId  String   @default("huam")     // 멀티테넌트 (동 단위)
+  createdAt DateTime @default(now())
+
+  entries    PatrolEntry[]
+  complaints Complaint[] @relation("assignee")
+  sessions   Session[]
+
+  @@map("users")
+}
+
+// ===== 순찰 기록 (핵심) =====
+model PatrolEntry {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+
+  category      String                     // 19종: illegal_dump, road_clean 등
+  evalItem      String?                    // 자동 매핑: 과태료, 분리배출 등
+  evalPoints    Int?                       // 해당 배점
+
+  latitude      Float?
+  longitude     Float?
+  address       String?                    // 역지오코딩 결과
+  addressText   String?                    // Track B: 원본 텍스트
+
+  memo          String?
+  quantity      Float    @default(1)       // 실적 건수 (사진수 ÷ 5 추정값)
+  unit          String   @default("건")
+
+  photoUrls     String[]                   // 스토리지 URL 배열
+  photoCount    Int      @default(0)
+
+  inputTrack    String   @default("realtime")  // realtime | batch
+  batchId       String?
+  originalPhotoTime DateTime?              // EXIF 촬영 시간
+
+  entryDate     DateTime @db.Date          // 실제 업무 날짜 (소급 가능)
+  createdAt     DateTime @default(now())
+  tenantId      String   @default("huam")
+
+  complaint       Complaint?  @relation("entryComplaint")
+  recyclingRecord RecyclingRecord?
+
+  @@index([entryDate])
+  @@index([userId])
+  @@index([category])
+  @@index([tenantId])
+  @@map("patrol_entries")
+}
+
+// ===== 민원 =====
+model Complaint {
+  id          String   @id @default(cuid())
+  title       String
+  address     String?
+  latitude    Float?
+  longitude   Float?
+  assignedTo  String?
+  assignee    User?    @relation("assignee", fields: [assignedTo], references: [id])
+  status      String   @default("pending")   // pending | assigned | done
+  entryId     String?  @unique
+  entry       PatrolEntry? @relation("entryComplaint", fields: [entryId], references: [id])
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+  tenantId    String   @default("huam")
+
+  @@index([status])
+  @@map("complaints")
+}
+
+// ===== 분리배출 수거 =====
+model RecyclingRecord {
+  id            String   @id @default(cuid())
+  type          String                       // battery | appliance | pet_bottle
+  quantity      Float
+  unit          String                       // kg | 매
+  certPhotoUrl  String?
+  entryId       String?  @unique
+  entry         PatrolEntry? @relation(fields: [entryId], references: [id])
+  recordMonth   DateTime @db.Date
+  createdAt     DateTime @default(now())
+  tenantId      String   @default("huam")
+
+  @@map("recycling_records")
+}
+
+// ===== 생성된 문서 =====
+model GeneratedDoc {
+  id          String   @id @default(cuid())
+  docType     String                         // daily_log, fine_request, quarter_package 등
+  title       String
+  content     String?  @db.Text
+  fileUrl     String?
+  periodStart DateTime? @db.Date
+  periodEnd   DateTime? @db.Date
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  tenantId    String   @default("huam")
+
+  @@map("generated_docs")
+}
+
+// ===== 세션 =====
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([token])
+  @@map("sessions")
+}

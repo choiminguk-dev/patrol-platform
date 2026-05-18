@@ -145,8 +145,12 @@ export default function DashboardPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showCalendar, setShowCalendar] = useState(false);
   const [moveDate, setMoveDate] = useState<string | null>(null); // 날짜 이동 모드
+  // 캘린더 dot 표시용 — 월별 entry 존재 날짜 캐시 (key: "YYYY-MM", value: Set of "YYYY-MM-DD")
+  const [activeDatesByMonth, setActiveDatesByMonth] = useState<Record<string, Set<string>>>({});
   // 보기 모드: 구조화(보고서/일지 카드) 기본 / 목록(연번 단순 나열)
   const [viewMode, setViewMode] = useState<"structured" | "list">("structured");
+  // 카테고리 필터 — 목록 상단 배지 클릭 시 해당 분류만 표시 (null = 전체)
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const calRef = useRef<HTMLDivElement>(null);
   const entriesRef = useRef<HTMLDivElement>(null);
 
@@ -165,6 +169,22 @@ export default function DashboardPage() {
       document.removeEventListener("touchstart", handleDown);
     };
   }, [showCalendar]);
+
+  // 캘린더 열림 또는 월 변경 시 — 그 달의 entry 존재 날짜 fetch (캘린더 dot 표시용).
+  // 매 open 마다 fresh 로드 — entry 추가/삭제 후 곧바로 반영.
+  useEffect(() => {
+    if (!showCalendar) return;
+    const y = parseInt(browseDate.slice(0, 4));
+    const m = parseInt(browseDate.slice(5, 7));
+    const key = `${y}-${String(m).padStart(2, "0")}`;
+    fetch(`/api/entries/active-dates?year=${y}&month=${m}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data || !Array.isArray(data.dates)) return;
+        setActiveDatesByMonth((prev) => ({ ...prev, [key]: new Set<string>(data.dates) }));
+      })
+      .catch(() => {});
+  }, [showCalendar, browseDate]);
 
   async function openDetail(id: string) {
     setLoadingDetail(true);
@@ -187,6 +207,7 @@ export default function DashboardPage() {
     setDateEntries(null);
     setSelecting(false);
     setSelectedIds([]);
+    setCategoryFilter(null); // 날짜 바뀌면 분류 필터 초기화 (다른 날 카테고리 안 맞음)
     fetch(`/api/entries/by-date?date=${browseDate}`)
       .then((r) => r.json())
       .then(setDateEntries);
@@ -479,33 +500,47 @@ export default function DashboardPage() {
                       </div>
                     ))}
                   </div>
-                  {/* 날짜 그리드 */}
+                  {/* 날짜 그리드 — entry 존재일은 하단 dot 표시 */}
                   <div className="grid grid-cols-7 gap-0.5">
-                    {calDays.map((day, i) => {
-                      if (day === null) return <div key={`e${i}`} />;
-                      const dateStr = `${calYear}-${String(calMonth).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-                      const isToday = dateStr === today;
-                      const isSelected = dateStr === browseDate;
-                      const isFuture = dateStr > today;
-                      const dow = (calFirstDay + day - 1) % 7;
-                      return (
-                        <button
-                          key={day}
-                          onClick={() => calSelectDay(day)}
-                          disabled={isFuture}
-                          className={`w-8 h-8 mx-auto flex items-center justify-center rounded-full text-xs transition-colors
-                            ${isSelected ? "bg-emerald-600 text-white font-bold" : ""}
-                            ${isToday && !isSelected ? "ring-1 ring-emerald-400 font-semibold text-emerald-700" : ""}
-                            ${isFuture ? "text-gray-200 cursor-not-allowed" : ""}
-                            ${!isSelected && !isFuture && !isToday ? "hover:bg-emerald-50" : ""}
-                            ${!isSelected && !isFuture && dow === 0 ? "text-red-500" : ""}
-                            ${!isSelected && !isFuture && dow === 6 ? "text-blue-500" : ""}
-                          `}
-                        >
-                          {day}
-                        </button>
-                      );
-                    })}
+                    {(() => {
+                      const monthKey = `${calYear}-${String(calMonth).padStart(2, "0")}`;
+                      const activeSet = activeDatesByMonth[monthKey];
+                      return calDays.map((day, i) => {
+                        if (day === null) return <div key={`e${i}`} />;
+                        const dateStr = `${calYear}-${String(calMonth).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                        const isToday = dateStr === today;
+                        const isSelected = dateStr === browseDate;
+                        const isFuture = dateStr > today;
+                        const dow = (calFirstDay + day - 1) % 7;
+                        const hasData = activeSet?.has(dateStr) ?? false;
+                        return (
+                          <button
+                            key={day}
+                            onClick={() => calSelectDay(day)}
+                            disabled={isFuture}
+                            title={hasData ? `${dateStr} — 등록 기록 있음` : undefined}
+                            className={`relative w-8 h-8 mx-auto flex items-center justify-center rounded-full text-xs transition-colors
+                              ${isSelected ? "bg-emerald-600 text-white font-bold" : ""}
+                              ${isToday && !isSelected ? "ring-1 ring-emerald-400 font-semibold text-emerald-700" : ""}
+                              ${isFuture ? "text-gray-200 cursor-not-allowed" : ""}
+                              ${!isSelected && !isFuture && !isToday ? "hover:bg-emerald-50" : ""}
+                              ${!isSelected && !isFuture && dow === 0 ? "text-red-500" : ""}
+                              ${!isSelected && !isFuture && dow === 6 ? "text-blue-500" : ""}
+                            `}
+                          >
+                            {day}
+                            {hasData && (
+                              <span
+                                aria-hidden
+                                className={`absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full ${
+                                  isSelected ? "bg-white" : "bg-emerald-500"
+                                }`}
+                              />
+                            )}
+                          </button>
+                        );
+                      });
+                    })()}
                   </div>
                   {/* 오늘 바로가기 */}
                   {browseDate !== today && (
@@ -547,23 +582,45 @@ export default function DashboardPage() {
               )}
             </div>
 
-            {/* 카테고리별 다운로드 */}
+            {/* 카테고리 필터 — 클릭 시 해당 분류만 표시, 동일 분류 재클릭 시 해제 */}
             {dateEntries.categories.length > 1 && (
-              <div className="flex flex-wrap gap-1.5 mb-3">
-                {dateEntries.categories.map((c) => (
-                  <button key={c.category} onClick={() => downloadPhotos(c.category)}
-                    disabled={downloading === c.category || c.photoCount === 0}
-                    className="text-xs bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 hover:border-emerald-400 disabled:opacity-40 transition-colors">
-                    {c.label} {c.count}건·{c.photoCount}장
-                    <span className="ml-1">{downloading === c.category ? "⏳" : "↓"}</span>
+              <div className="flex flex-wrap gap-1.5 mb-3 items-center">
+                {categoryFilter && (
+                  <button
+                    onClick={() => setCategoryFilter(null)}
+                    className="text-xs px-2.5 py-1.5 rounded-lg bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200"
+                    title="필터 해제 — 전체 항목 보기"
+                  >
+                    ✕ 전체 {dateEntries.entries.length}건
                   </button>
-                ))}
+                )}
+                {dateEntries.categories.map((c) => {
+                  const active = categoryFilter === c.category;
+                  return (
+                    <button
+                      key={c.category}
+                      onClick={() => setCategoryFilter(active ? null : c.category)}
+                      className={`text-xs rounded-lg px-2.5 py-1.5 border transition-colors ${
+                        active
+                          ? "bg-emerald-600 text-white border-emerald-700"
+                          : "bg-white text-gray-700 border-gray-200 hover:border-emerald-400"
+                      }`}
+                      title={active ? "필터 해제" : `${c.label} 분류만 표시`}
+                    >
+                      {c.label} {c.count}건·{c.photoCount}장
+                    </button>
+                  );
+                })}
               </div>
             )}
 
             {/* 입력 목록 헤더 (선택/삭제/다운로드/AI 병합) */}
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-gray-500">{dateEntries.entries.length}건</span>
+              <span className="text-xs text-gray-500">
+                {categoryFilter
+                  ? `${dateEntries.entries.filter((e) => e.category === categoryFilter).length}건 / ${dateEntries.entries.length}건`
+                  : `${dateEntries.entries.length}건`}
+              </span>
               <div className="flex gap-2 items-center">
                 {selecting ? (
                   <>
@@ -643,9 +700,22 @@ export default function DashboardPage() {
             </div>
 
             {/* 구조화 뷰 — 좌측 메타 + 우측 사진 그리드 */}
-            {viewMode === "structured" && (
+            {viewMode === "structured" && (() => {
+              const visibleEntries = categoryFilter
+                ? dateEntries.entries.filter((e) => e.category === categoryFilter)
+                : dateEntries.entries;
+              if (visibleEntries.length === 0) {
+                return (
+                  <div className="text-sm text-gray-400 py-8 text-center">
+                    {categoryFilter
+                      ? `"${CATEGORY_MAP[categoryFilter]?.label || categoryFilter}" 분류에 해당하는 항목이 없습니다`
+                      : "표시할 항목이 없습니다"}
+                  </div>
+                );
+              }
+              return (
               <div className="space-y-3">
-                {dateEntries.entries.map((e, listIdx) => {
+                {visibleEntries.map((e, listIdx) => {
                   const seq = listIdx + 1;
                   const canSelect = me?.role === "ADMIN" || e.userId === me?.id;
                   const isChecked = selectedIds.includes(e.id);
@@ -763,12 +833,26 @@ export default function DashboardPage() {
                   );
                 })}
               </div>
-            )}
+              );
+            })()}
 
             {/* 목록 뷰 — 단순 한 줄 카드 */}
-            {viewMode === "list" && (
+            {viewMode === "list" && (() => {
+              const visibleEntries = categoryFilter
+                ? dateEntries.entries.filter((e) => e.category === categoryFilter)
+                : dateEntries.entries;
+              if (visibleEntries.length === 0) {
+                return (
+                  <div className="text-sm text-gray-400 py-8 text-center">
+                    {categoryFilter
+                      ? `"${CATEGORY_MAP[categoryFilter]?.label || categoryFilter}" 분류에 해당하는 항목이 없습니다`
+                      : "표시할 항목이 없습니다"}
+                  </div>
+                );
+              }
+              return (
             <div className="space-y-2">
-              {dateEntries.entries.map((e, listIdx) => {
+              {visibleEntries.map((e, listIdx) => {
                 const canSelect = me?.role === "ADMIN" || e.userId === me?.id;
                 const seqNo = listIdx + 1;
                 return (
@@ -817,7 +901,8 @@ export default function DashboardPage() {
                 );
               })}
             </div>
-            )}
+              );
+            })()}
 
             {/* 전체 선택/해제 */}
             {selecting && dateEntries.entries.length > 1 && (

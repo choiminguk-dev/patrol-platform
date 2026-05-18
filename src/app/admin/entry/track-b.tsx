@@ -29,6 +29,8 @@ interface PhotoGroup {
   originalAddressAi?: string;
   /** AI 판단 근거 — 정확도 개선 추적용 */
   aiReasoning?: string;
+  /** LLM 이 추출한 watermark 시각 첫 값 "HH:MM" — EXIF 없는 batch 의 originalPhotoTime 폴백 */
+  firstWatermarkHHMM?: string;
 }
 
 interface ZoneItem {
@@ -223,6 +225,7 @@ export default function TrackB() {
             needsReview: !!g.needsReview,
             originalAddressAi: g.address || "",
             aiReasoning: g.reasoning || "",
+            firstWatermarkHHMM: typeof g.firstWatermarkHHMM === "string" ? g.firstWatermarkHHMM : undefined,
           }));
 
           const assigned = new Set<number>();
@@ -556,7 +559,15 @@ export default function TrackB() {
             .map((idx) => uploadedFiles[idx - 1]?.exif?.date)
             .filter((d): d is string => !!d)
             .sort();
-          const originalPhotoTime = photoDates[0] || null;
+          let originalPhotoTime: string | null = photoDates[0] || null;
+          // EXIF strip 된 batch 폴백 — LLM 이 읽은 watermark 시각을 entryDate (KST) 와 결합.
+          // batch route 의 toKstWallClock 가 +09:00 ISO 를 KST wall clock string 으로 변환.
+          if (!originalPhotoTime && g.firstWatermarkHHMM) {
+            const m = g.firstWatermarkHHMM.match(/^(\d{1,2}):(\d{2})$/);
+            if (m) {
+              originalPhotoTime = `${entryDate}T${m[1].padStart(2, "0")}:${m[2]}:00+09:00`;
+            }
+          }
           return {
             category: g.category,
             photoUrls: g.photoIndices.map((idx) => uploadedFiles[idx - 1]?.url).filter(Boolean),

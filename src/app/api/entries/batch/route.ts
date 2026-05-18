@@ -4,6 +4,25 @@ import { execute, queryMany } from "@/lib/db";
 import { CATEGORY_MAP, POOL_DEFAULTS } from "@/lib/categories";
 import { reverseGeocode } from "@/lib/geocode";
 
+/**
+ * Node=KST + Postgres=UTC + 컬럼 TIMESTAMP WITHOUT TZ 조합에서
+ * 클라이언트가 UTC ISO 송신 → DB 에 Z 무시되어 wall clock 시프트 발생 (9:13 → 00:13).
+ * server INSERT 전에 KST wall clock string ("YYYY-MM-DD HH:MM:SS") 으로 변환해
+ * pg driver 가 다시 KST 로 wrap 했을 때 epoch 가 일치하도록 보장.
+ */
+const KST_WALL = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Asia/Seoul",
+  year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", second: "2-digit",
+  hour12: false,
+});
+function toKstWallClock(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return KST_WALL.format(d); // "2026-05-13 09:13:45"
+}
+
 interface BatchEntry {
   category: string;
   photoUrls: string[];
@@ -61,15 +80,30 @@ export async function POST(request: Request) {
 
     // createdAt: 사진 EXIF 촬영시각 우선, 없으면 09:00 + 항목 순서 폴백
     // → 일자별 목록의 시간 표시 = 실제 촬영 시간
-    let createdAtStr: string | null = null;
-    if (entry.originalPhotoTime) {
-      const d = new Date(entry.originalPhotoTime);
-      if (!isNaN(d.getTime())) createdAtStr = d.toISOString();
-    }
+    // KST wall clock 으로 stored (TIMESTAMP WITHOUT TZ + Postgres UTC + Node KST 조합 가드)
+    let createdAtStr: string | null = toKstWallClock(entry.originalPhotoTime);
     if (!createdAtStr) {
       const baseHour = 9;
       const minuteOffset = entryIdx;
-      createdAtStr = `${body.entryDate}T${String(baseHour).padStart(2, "0")}:${String(minuteOffset % 60).padStart(2, "0")}:00.000Z`;
+      // body.entryDate (KST date) + 09:MM:00 KST wall clock 그대로
+      createdAtStr = `${body.entryDate} ${String(baseHour).padStart(2, "0")}:${String(minuteOffset % 60).padStart(2, "0")}:00`;
+    }
+
+    // originalPhotoTime 컬럼도 KST wall clock 으로 통일
+    const originalPhotoTimeStr = toKstWallClock(entry.originalPhotoTime);
+
+    // entryDate 자동 보정 — 사진 EXIF 일자가 사용자 선택 entryDate 와 다르면 EXIF 우선.
+    // 사용자가 5/17 default 로 batch 업로드해도 사진이 5/13 이면 entryDate = 5/13 으로 저장.
+    // KST 기준 YYYY-MM-DD 도출 (다운로드/dashboard 의 일자별 그룹화와 일치).
+    let entryDateActual = body.entryDate;
+    if (entry.originalPhotoTime) {
+      const d = new Date(entry.originalPhotoTime);
+      if (!isNaN(d.getTime())) {
+        const kstDate = d.toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
+        if (kstDate && /^\d{4}-\d{2}-\d{2}$/.test(kstDate)) {
+          entryDateActual = kstDate;
+        }
+      }
     }
 
     values.push(
@@ -88,8 +122,8 @@ export async function POST(request: Request) {
       entry.photoUrls,
       entry.photoUrls.length,
       batchId,
-      entry.originalPhotoTime ?? null,
-      body.entryDate,
+      originalPhotoTimeStr,
+      entryDateActual,
       entry.zoneId ?? null,
       createdAtStr
     );

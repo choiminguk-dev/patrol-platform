@@ -96,13 +96,17 @@ export async function GET(request: Request) {
     photoUrls: string[];
     category: string;
     addressText: string | null;
+    address: string | null;
+    latitude: number | null;
+    longitude: number | null;
     memo: string | null;
     zoneId: string | null;
     landmark: string | null;
     userName: string;
     createdAt: string;
   }>(
-    `SELECT e.id, e."photoUrls", e.category, e."addressText", e.memo, e."zoneId",
+    `SELECT e.id, e."photoUrls", e.category, e."addressText", e.address,
+            e.latitude, e.longitude, e.memo, e."zoneId",
             z.landmark, u.name as "userName", e."createdAt"
      FROM patrol_entries e
      JOIN users u ON u.id = e."userId"
@@ -111,6 +115,22 @@ export async function GET(request: Request) {
      ORDER BY e."createdAt" ${orderDir}`,
     [date]
   );
+
+  /**
+   * 위치 표시 폴백 — addressText (사용자/AI OCR) → address (역지오코딩) → 좌표 string → "(미입력)"
+   * GPS 좌표 살아있고 주소판 없는 사진도 위치 표시되도록.
+   */
+  const locationLabel = (e: {
+    addressText: string | null; address: string | null;
+    latitude: number | null; longitude: number | null;
+  }): string => {
+    if (e.addressText && e.addressText.trim()) return e.addressText;
+    if (e.address && e.address.trim()) return e.address;
+    if (e.latitude != null && e.longitude != null) {
+      return `위경도 ${Number(e.latitude).toFixed(5)}, ${Number(e.longitude).toFixed(5)}`;
+    }
+    return "";
+  };
 
   // 다운로드 대상 필터링
   const ids = idsParam ? idsParam.split(",").filter(Boolean) : null;
@@ -172,7 +192,8 @@ export async function GET(request: Request) {
       const dateTimeStr = formatDateTime(entry.createdAt); // "4.9. 22:25"
       const timeKey = `${hh}${mm}${ss}`;
       const seqStr = String(seq).padStart(4, "0");
-      const folderBase = safeName(entry.addressText || "위치미상");
+      const locLabel = locationLabel(entry);
+      const folderBase = safeName(locLabel || "위치미상");
       const folderName = `${seqStr}_${timeKey}_${folderBase}`;
 
       const catLabel = CATEGORY_MAP[entry.category]?.label || entry.category;
@@ -183,7 +204,7 @@ export async function GET(request: Request) {
         `연번: ${seq}`,
         `일시: ${dateTimeStr}`,
         `카테고리: ${catLabel}`,
-        `위치: ${entry.addressText || "(미입력)"}`,
+        `위치: ${locLabel || "(미입력)"}`,
         `구역: ${entry.landmark || "-"}`,
         `사진수: ${photoCount}장`,
         `메모: ${entry.memo || "-"}`,
@@ -196,7 +217,7 @@ export async function GET(request: Request) {
         String(seq),
         dateTimeStr,
         catLabel,
-        entry.addressText || "",
+        locLabel,
         entry.landmark || "",
         String(photoCount),
         (entry.memo || "").replace(/[\r\n]+/g, " "),
@@ -223,7 +244,7 @@ export async function GET(request: Request) {
       // HTML 카드
       const copyText = [
         `${seq} · ${dateTimeStr}`,
-        entry.addressText || "(미입력)",
+        locLabel || "(미입력)",
         entry.landmark ? `구역: ${entry.landmark}` : "",
         `${catLabel} · 사진 ${photoCount}장`,
         entry.memo ? `메모: ${entry.memo}` : "",
@@ -240,7 +261,7 @@ export async function GET(request: Request) {
         `<div class="card">
   <div class="meta">
     <div class="title"><span class="seq">${seq}</span>${htmlEscape(dateTimeStr)}</div>
-    <div><span class="label">위치</span>${htmlEscape(entry.addressText || "(미입력)")}</div>
+    <div><span class="label">위치</span>${htmlEscape(locLabel || "(미입력)")}</div>
     <div><span class="label">구역</span>${htmlEscape(entry.landmark || "-")}</div>
     <div><span class="label">분류</span>${htmlEscape(catLabel)} · 사진 ${photoCount}장</div>
     <div><span class="label">담당</span>${htmlEscape(entry.userName)}</div>

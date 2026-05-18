@@ -32,7 +32,7 @@ export async function PATCH(
 
   const { id } = await params;
   const body = await request.json();
-  const { category, memo, addressText, photoUrls, zoneId, entryDate } = body;
+  const { category, memo, addressText, photoUrls, zoneId, entryDate, categorySource } = body;
 
   // 권한: ADMIN 또는 본인
   if (user.role !== "ADMIN") {
@@ -56,6 +56,19 @@ export async function PATCH(
     fields.push(`category = $${i++}`); values.push(category);
     fields.push(`"evalItem" = $${i++}`); values.push(cat.eval);
     fields.push(`"evalPoints" = $${i++}`); values.push(cat.points);
+    // B안: 사용자 카테고리 변경 = manual (명시 source 송신 없을 때만 자동 'manual').
+    // categorySource 가 body 에 명시되면 그 값 우선 (아래 분기에서 처리).
+    if (categorySource === undefined) {
+      fields.push(`"categorySource" = $${i++}`); values.push("manual");
+    }
+  }
+  if (categorySource !== undefined) {
+    // B안: "✓ 확정" 액션은 { categorySource: 'confirmed' } 송신.
+    // 카테고리 동시 변경 시 사용자가 명시한 source 가 'manual' 자동 채움보다 우선.
+    if (!["suggested", "confirmed", "manual"].includes(categorySource)) {
+      return NextResponse.json({ error: "유효하지 않은 categorySource" }, { status: 400 });
+    }
+    fields.push(`"categorySource" = $${i++}`); values.push(categorySource);
   }
   if (memo !== undefined) {
     fields.push(`memo = $${i++}`);

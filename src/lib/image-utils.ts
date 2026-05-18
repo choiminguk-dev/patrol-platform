@@ -2,14 +2,40 @@
 import exifr from "exifr";
 import { detectFacesBatch, applyBlurOnDevice, type FaceBBox } from "./face-detect-client";
 
+/**
+ * iPhone HEIC/HEIF 를 Canvas-호환 JPEG Blob 으로 변환.
+ * - 데스크탑 Chrome/Edge 는 HEIC native 디코딩 미지원 → Image() 로드 실패
+ * - iPhone Safari / PWA 는 native 지원이지만 변환해도 무해
+ * heic2any 는 동적 import — HEIC 가 아니면 패키지 로드 X (bundle 절감 + SSR 안전).
+ */
+async function ensureCanvasCompatible(input: File | Blob): Promise<Blob> {
+  const name = (input as File).name?.toLowerCase?.() ?? "";
+  const type = (input.type || "").toLowerCase();
+  const isHeic = name.endsWith(".heic") || name.endsWith(".heif")
+    || type === "image/heic" || type === "image/heif";
+  if (!isHeic) return input;
+  try {
+    // heic2any d.ts 가 `export = fn` (CommonJS) 형태 — ESM dynamic import 시 default 또는 namespace 함수.
+    const mod: unknown = await import("heic2any");
+    type Heic2AnyFn = (opts: { blob: Blob; toType?: string; quality?: number }) => Promise<Blob | Blob[]>;
+    const fn = ((mod as { default?: Heic2AnyFn }).default ?? mod) as Heic2AnyFn;
+    const result = await fn({ blob: input, toType: "image/jpeg", quality: 0.9 });
+    return Array.isArray(result) ? result[0] : result;
+  } catch (err) {
+    console.warn("[ensureCanvasCompatible] HEIC 변환 실패 — 원본 반환:", name, err);
+    return input;
+  }
+}
+
 /** 이미지를 maxSize px로 리사이즈 + JPEG 압축 → Blob 반환 */
-export function compressImage(
+export async function compressImage(
   file: File,
   maxSize: number = 1280,
   quality: number = 0.7
 ): Promise<Blob | null> {
+  const source = await ensureCanvasCompatible(file);
   return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
+    const url = URL.createObjectURL(source);
     const img = new Image();
     let done = false;
     const finish = (blob: Blob | null) => {
@@ -80,9 +106,10 @@ export async function extractExif(file: File): Promise<{ lat?: number; lng?: num
 }
 
 /** 썸네일 생성 (150px, 0.5 quality) → data URL. Blob/File 모두 허용. */
-export function createThumbnail(source: Blob): Promise<string | null> {
+export async function createThumbnail(source: Blob): Promise<string | null> {
+  const compat = await ensureCanvasCompatible(source);
   return new Promise((resolve) => {
-    const url = URL.createObjectURL(source);
+    const url = URL.createObjectURL(compat);
     const img = new Image();
     let done = false;
     const finish = (result: string | null) => {

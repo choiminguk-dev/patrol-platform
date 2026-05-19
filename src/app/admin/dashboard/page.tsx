@@ -749,9 +749,24 @@ export default function DashboardPage() {
                   ? `${dateEntries.entries.filter((e) => e.category === categoryFilter).length}건 / ${dateEntries.entries.length}건`
                   : `${dateEntries.entries.length}건`}
               </span>
-              <div className="flex gap-2 items-center">
+              <div className="flex gap-2 items-center flex-wrap">
                 {selecting ? (
                   <>
+                    {/* 선택 모드 진입 직후 바로 옆에 전체선택 노출 (스크롤 없이 즉시 접근) */}
+                    {dateEntries.entries.length > 1 && (() => {
+                      const selectable = dateEntries.entries
+                        .filter((x) => me?.role === "ADMIN" || x.userId === me?.id)
+                        .map((x) => x.id);
+                      const allOn = selectable.length > 0 && selectedIds.length === selectable.length;
+                      return (
+                        <button
+                          onClick={() => setSelectedIds(allOn ? [] : selectable)}
+                          className="text-xs px-2 py-0.5 rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                        >
+                          {allOn ? "전체 해제" : "전체 선택"}
+                        </button>
+                      );
+                    })()}
                     <button onClick={downloadSelected}
                       disabled={selectedIds.length === 0 || downloading === "selected"}
                       className="text-xs text-emerald-600 disabled:opacity-30">
@@ -778,13 +793,11 @@ export default function DashboardPage() {
                         </button>
                       )
                     )}
-                    {me?.role === "ADMIN" && (
-                      <button onClick={deleteSelected}
-                        disabled={selectedIds.length === 0}
-                        className="text-xs text-red-500 disabled:opacity-30">
-                        {selectedIds.length}건 삭제
-                      </button>
-                    )}
+                    <button onClick={deleteSelected}
+                      disabled={selectedIds.length === 0}
+                      className="text-xs text-red-500 disabled:opacity-30">
+                      {selectedIds.length}건 삭제
+                    </button>
                     <button onClick={() => { setSelecting(false); setSelectedIds([]); setMoveDate(null); }}
                       className="text-xs text-gray-400">취소</button>
                   </>
@@ -871,7 +884,7 @@ export default function DashboardPage() {
                     <article
                       key={e.id}
                       className={`bg-white rounded-xl border p-4 flex flex-col md:flex-row gap-4 items-start ${
-                        isChecked ? "border-blue-500 ring-2 ring-blue-200" : "border-gray-200"
+                        isChecked ? "border-emerald-500 ring-2 ring-emerald-200" : "border-gray-200"
                       }`}
                     >
                       {/* 좌측: 메타 — 박스 자체가 상세 진입 */}
@@ -892,7 +905,7 @@ export default function DashboardPage() {
                             disabled={!canSelect}
                             className={`px-2 py-0.5 rounded text-xs font-bold transition-colors ${
                               isChecked
-                                ? "bg-blue-600 text-white"
+                                ? "bg-emerald-600 text-white"
                                 : "bg-emerald-700 text-white hover:bg-emerald-600"
                             } disabled:opacity-50`}
                             title={canSelect ? "클릭하면 선택/해제 (다중 선택 가능)" : "권한 없음"}
@@ -1003,7 +1016,17 @@ export default function DashboardPage() {
                                     if (!trimmed) return null;
                                     const resolved = resolveCategoryInput(trimmed);
                                     if (!resolved || resolved.label === trimmed) return null;
-                                    return <span className="text-[11px] text-amber-700">→ {resolved.label}</span>;
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={(ev) => { ev.stopPropagation(); commitCategory(e.id, resolved.id, e.category); }}
+                                        disabled={editingCategorySaving}
+                                        className="text-[11px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 disabled:opacity-50"
+                                        title={`클릭/Enter 로 "${resolved.label}" 적용`}
+                                      >
+                                        → {resolved.label}
+                                      </button>
+                                    );
                                   })()}
                                 </div>
                                 {/* 같은 날짜 다른 entry 분류 후보 — 시간순(연번순), 카테고리 중복 제거 */}
@@ -1189,15 +1212,6 @@ export default function DashboardPage() {
               );
             })()}
 
-            {/* 전체 선택/해제 */}
-            {selecting && dateEntries.entries.length > 1 && (
-              <button onClick={() => {
-                const selectable = dateEntries.entries.filter((e) => me?.role === "ADMIN" || e.userId === me?.id).map((e) => e.id);
-                setSelectedIds(selectedIds.length === selectable.length ? [] : selectable);
-              }} className="text-xs text-emerald-600 mt-2">
-                {selectedIds.length === dateEntries.entries.filter((e) => me?.role === "ADMIN" || e.userId === me?.id).length ? "전체 해제" : "전체 선택"}
-              </button>
-            )}
           </>
         )}
       </div>

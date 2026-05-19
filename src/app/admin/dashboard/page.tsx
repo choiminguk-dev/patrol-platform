@@ -443,27 +443,6 @@ export default function DashboardPage() {
     }
   }
 
-  async function autoMergeDate() {
-    if (!confirm("같은 구역 또는 같은 주소 항목들을 자동으로 병합하시겠습니까?\n(첫 항목으로 사진이 합쳐지고 나머지는 삭제됩니다)")) return;
-    const res = await fetch("/api/entries/auto-merge", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ date: browseDate }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.mergedGroups === 0) {
-        alert("병합할 항목이 없습니다 (같은 구역/주소 중복 없음)");
-      } else {
-        alert(`${data.mergedGroups}개 그룹 병합 완료 (${data.removedEntries}개 항목 정리)`);
-      }
-      refreshDateEntries();
-    } else {
-      const data = await res.json();
-      alert(data.error || "병합 실패");
-    }
-  }
-
   if (!stats) {
     return <div className="p-4 text-sm text-gray-400">로딩 중...</div>;
   }
@@ -803,15 +782,6 @@ export default function DashboardPage() {
                   </>
                 ) : (
                   <>
-                    {me?.role === "ADMIN" && dateEntries.entries.length > 1 && (
-                      <button
-                        onClick={autoMergeDate}
-                        className="text-xs px-2 py-0.5 rounded-md bg-purple-600 text-white font-semibold"
-                        title="같은 구역 또는 같은 주소 항목을 자동 병합"
-                      >
-                        🤖 AI 병합
-                      </button>
-                    )}
                     {dateEntries.entries.length > 0 && (
                       <button onClick={() => setSelecting(true)} className="text-xs text-gray-400">선택</button>
                     )}
@@ -1084,11 +1054,6 @@ export default function DashboardPage() {
                                   >
                                     ✓ 확정
                                   </button>
-                                )}
-                                {e.categorySource === "suggested" && (
-                                  <span className="text-[10px] text-amber-600" title="AI 추천 — 검토 필요">
-                                    추천
-                                  </span>
                                 )}
                               </div>
                             ) : (

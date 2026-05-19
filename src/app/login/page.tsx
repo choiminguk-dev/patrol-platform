@@ -20,7 +20,7 @@ const ROLE_LABELS: Record<string, string> = {
   RESOURCE: "자원관리사",
 };
 
-const ALLOWED_IDS = ["me", "safety"];
+const ALLOWED_IDS = ["me", "safety", "admin"];
 
 export default function LoginPage() {
   const router = useRouter();

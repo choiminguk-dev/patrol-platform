@@ -27,16 +27,24 @@ export async function POST(request: Request) {
   if (!addressText && latitude != null && longitude != null) {
     geocodedAddress = await reverseGeocode(latitude, longitude);
   }
+  // addressText 폴백 — reverseGeocode → 좌표 string 순. dashboard "위치" 자동 표시.
+  let addressTextFinal: string | null = addressText ?? null;
+  if (!addressTextFinal && latitude != null && longitude != null) {
+    addressTextFinal = geocodedAddress
+      ?? `위경도 ${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}`;
+  }
 
+  // 단일 entry (track-a) 는 사용자 직접 분류 선택 → categorySource='manual'.
+  // track-b batch 는 analyze-batch 결과로 INSERT — DB default 'suggested' 적용.
   await execute(
     `INSERT INTO patrol_entries
       (id, "userId", category, "evalItem", "evalPoints",
        latitude, longitude, "addressText", address, memo, quantity,
-       unit, "photoUrls", "photoCount", "inputTrack", "entryDate")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'realtime', $15)`,
+       unit, "photoUrls", "photoCount", "inputTrack", "entryDate", "categorySource")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'realtime', $15, 'manual')`,
     [
       id, user.id, category, cat.eval, cat.points,
-      latitude ?? null, longitude ?? null, addressText ?? null, geocodedAddress,
+      latitude ?? null, longitude ?? null, addressTextFinal, geocodedAddress,
       memo ?? null, 1, cat.unit, photoUrls, photoUrls.length, date,
     ]
   );

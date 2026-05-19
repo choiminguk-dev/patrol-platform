@@ -67,6 +67,13 @@ export async function POST(request: Request) {
     if (!entry.addressText && entry.latitude != null && entry.longitude != null) {
       geocodedAddress = await reverseGeocode(entry.latitude, entry.longitude);
     }
+    // addressText 폴백 — AI OCR 없을 때 reverseGeocode → 좌표 string 순으로 채움.
+    // dashboard/CSV "위치" 자동 표시 (addressTextAi 는 AI 원본 학습용으로 별도 보존).
+    let addressTextFinal: string | null = entry.addressText ?? null;
+    if (!addressTextFinal && entry.latitude != null && entry.longitude != null) {
+      addressTextFinal = geocodedAddress
+        ?? `위경도 ${entry.latitude.toFixed(5)}, ${entry.longitude.toFixed(5)}`;
+    }
 
     const quantity = Math.max(1, Math.ceil(entry.photoUrls.length / 5));
     const id = crypto.randomUUID();
@@ -114,7 +121,7 @@ export async function POST(request: Request) {
       cat.points,
       entry.latitude ?? null,
       entry.longitude ?? null,
-      entry.addressText ?? null,
+      addressTextFinal,
       geocodedAddress,
       entry.memo ?? null,
       quantity,

@@ -176,3 +176,12 @@ CREATE TABLE IF NOT EXISTS "manual_evals" (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "manual_evals_unique"
   ON "manual_evals"("tenantId", "evalItem", "halfYear");
+
+-- ===== B안: AI 자동 분류는 추천(suggested), 사용자 1클릭 확정(confirmed) 또는 인라인 편집(manual) =====
+-- 16동 운영 정정 의지 60% 핵심 분기. analyze-batch / track-b 결과는 suggested 로 INSERT.
+ALTER TABLE "patrol_entries"
+  ADD COLUMN IF NOT EXISTS "categoryConfidence" DOUBLE PRECISION;
+ALTER TABLE "patrol_entries"
+  ADD COLUMN IF NOT EXISTS "categorySource" TEXT DEFAULT 'suggested';
+CREATE INDEX IF NOT EXISTS "patrol_entries_categorySource_idx"
+  ON "patrol_entries"("categorySource");

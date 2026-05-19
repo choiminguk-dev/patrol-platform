@@ -17,6 +17,7 @@ export async function GET(request: Request) {
     id: string;
     userId: string;
     category: string;
+    categorySource: string | null;
     photoUrls: string[];
     photoCount: number;
     quantity: number;
@@ -30,7 +31,7 @@ export async function GET(request: Request) {
     createdAt: string;
     userName: string;
   }>(
-    `SELECT e.id, e."userId", e.category, e."photoUrls", e."photoCount",
+    `SELECT e.id, e."userId", e.category, e."categorySource", e."photoUrls", e."photoCount",
             e.quantity, e.unit, e.memo, e."addressText", e.address,
             e.latitude, e.longitude, e."inputTrack",
             e."createdAt", u.name as "userName"

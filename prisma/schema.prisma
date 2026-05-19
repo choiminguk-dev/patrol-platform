@@ -39,6 +39,11 @@ model PatrolEntry {
   evalItem      String?                    // 자동 매핑: 과태료, 분리배출 등
   evalPoints    Int?                       // 해당 배점
 
+  // B안: AI 자동 분류는 추천(suggested) 으로 노출 → 사용자 1클릭 확정(confirmed)
+  // 또는 인라인 편집으로 변경(manual). 16동 운영 시 정정 의지 60% 핵심 분기.
+  categoryConfidence Float?                // AI 분류 신뢰도 (analyze-batch 응답)
+  categorySource     String?  @default("suggested")  // suggested | confirmed | manual
+
   latitude      Float?
   longitude     Float?
   address       String?                    // 역지오코딩 결과

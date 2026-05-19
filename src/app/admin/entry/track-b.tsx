@@ -258,7 +258,15 @@ export default function TrackB() {
                 if (!res.ok) return g;
                 const gdata = await res.json();
                 if (!gdata.address) return g;
-                return { ...g, address: gdata.address as string };
+                // AI 가 "주소판 미검출"로 비웠지만 위치 정보로 보강했음을 reasoning 에 명시
+                const fallbackNote = `위치 정보(좌표)로 주소 자동 보강: ${gdata.address}`;
+                return {
+                  ...g,
+                  address: gdata.address as string,
+                  aiReasoning: g.aiReasoning
+                    ? `${g.aiReasoning}\n→ ${fallbackNote}`
+                    : fallbackNote,
+                };
               } catch { return g; }
             })
           );
@@ -571,9 +579,7 @@ export default function TrackB() {
           return {
             category: g.category,
             photoUrls: g.photoIndices.map((idx) => uploadedFiles[idx - 1]?.url).filter(Boolean),
-            memo: g.aiReasoning
-              ? (g.memo ? `${g.memo}\n[AI] ${g.aiReasoning}` : `[AI] ${g.aiReasoning}`)
-              : g.memo,
+            memo: g.memo,
             addressText: g.address,
             addressTextAi: g.originalAddressAi || null, // AI 첫 제안 (정정 학습용)
             latitude: uploadedFiles[g.photoIndices[0] - 1]?.exif?.lat,

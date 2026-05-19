@@ -241,6 +241,20 @@ export async function reverseGeocode(
 }
 
 /**
+ * Forward geocode 입력 정규화 — reverseGeocode 가 만든 "동 (도로명 N-M)" 패턴을
+ * Kakao address search 가 알아먹는 "도로명 N-M" 으로 환원. 괄호와 동명이 함께 있으면
+ * Kakao 가 자유 텍스트로 받아 _다른 건물명_ 에 매칭하는 사고가 남 (예: "후암동 (후암로13길 26)"
+ * → 인근 "후암동주민센터" 좌표 반환). 괄호 안 도로명만 추출하면 안정적.
+ *
+ * 폴백 — 정규식 매칭 안 되면 원본 반환 (이미 도로명 단독 입력 호환).
+ */
+function normalizeForwardQuery(raw: string): string {
+  const m = raw.trim().match(/^[^()]+\(([^()]+)\)\s*$/);
+  if (m && m[1].trim()) return m[1].trim();
+  return raw.trim();
+}
+
+/**
  * 주소 → 좌표 (forward geocoding)
  * 예: "후암로 32-6" → { lat: 37.5505, lng: 126.9759 }
  * Kakao 우선, 실패 시 null
@@ -252,25 +266,34 @@ export async function forwardGeocode(
   const key = process.env.KAKAO_REST_API_KEY;
   if (!key) return null;
 
-  try {
-    const data = await kakaoFetch<KakaoAddressSearch>(
-      `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(address)}`,
-      key
-    );
-    const doc = data?.documents?.[0];
-    if (!doc) return null;
+  const normalized = normalizeForwardQuery(address);
+  const queries = normalized !== address ? [normalized, address] : [address];
 
-    // road_address 우선, 없으면 address(지번)
-    const xStr = doc.road_address?.x || doc.address?.x || doc.x;
-    const yStr = doc.road_address?.y || doc.address?.y || doc.y;
-    if (!xStr || !yStr) return null;
+  for (const q of queries) {
+    try {
+      const data = await kakaoFetch<KakaoAddressSearch>(
+        `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(q)}`,
+        key
+      );
+      const doc = data?.documents?.[0];
+      if (!doc) continue;
 
-    const lng = parseFloat(xStr);
-    const lat = parseFloat(yStr);
-    if (isNaN(lat) || isNaN(lng)) return null;
+      // road_address 우선, 없으면 address(지번)
+      const xStr = doc.road_address?.x || doc.address?.x || doc.x;
+      const yStr = doc.road_address?.y || doc.address?.y || doc.y;
+      if (!xStr || !yStr) continue;
 
-    return { lat, lng };
-  } catch {
-    return null;
+      const lng = parseFloat(xStr);
+      const lat = parseFloat(yStr);
+      if (isNaN(lat) || isNaN(lng)) continue;
+
+      if (q !== address) {
+        console.log(`[geocode] forward 정규화 적용: "${address}" → "${q}" → (${lat}, ${lng})`);
+      }
+      return { lat, lng };
+    } catch {
+      /* 다음 query 시도 */
+    }
   }
+  return null;
 }

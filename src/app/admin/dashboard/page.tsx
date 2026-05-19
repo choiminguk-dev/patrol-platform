@@ -104,6 +104,8 @@ interface DateEntries {
     id: string;
     userId: string;
     category: string;
+    /** B안: AI 추천(suggested) / 사용자 확정(confirmed) / 사용자 변경(manual) */
+    categorySource: string | null;
     photoUrls: string[];
     photoCount: number;
     quantity: number;
@@ -151,6 +153,14 @@ export default function DashboardPage() {
   const [viewMode, setViewMode] = useState<"structured" | "list">("structured");
   // 카테고리 필터 — 목록 상단 배지 클릭 시 해당 분류만 표시 (null = 전체)
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  // 분류 인라인 편집 — 텍스트 prefix 매칭 + 후보 연번 칩 빠른 적용 (vigil 9994546 미러)
+  const [editingCategoryEntryId, setEditingCategoryEntryId] = useState<string | null>(null);
+  const [editingCategoryText, setEditingCategoryText] = useState("");
+  const [editingCategorySaving, setEditingCategorySaving] = useState(false);
+  // 주소 인라인 편집 — "위치" 라인 클릭 → input. Enter/Esc (vigil 220a22b 미러).
+  const [editingAddressEntryId, setEditingAddressEntryId] = useState<string | null>(null);
+  const [editingAddressText, setEditingAddressText] = useState("");
+  const [editingAddressSaving, setEditingAddressSaving] = useState(false);
   const calRef = useRef<HTMLDivElement>(null);
   const entriesRef = useRef<HTMLDivElement>(null);
 
@@ -216,6 +226,124 @@ export default function DashboardPage() {
   function refreshDateEntries() {
     fetch(`/api/entries/by-date?date=${browseDate}`).then((r) => r.json()).then(setDateEntries);
     fetch(`/api/stats?scope=${scope}`).then((r) => r.json()).then(setStats);
+  }
+
+  /** 분류 인라인 편집 — vigil 9994546 미러. 텍스트 + prefix 매칭 + 후보 연번 칩 */
+  function startEditCategory(entryId: string, currentCategoryId: string) {
+    if (editingCategorySaving) return;
+    const label = CATEGORY_MAP[currentCategoryId]?.label || currentCategoryId;
+    setEditingCategoryEntryId(entryId);
+    setEditingCategoryText(label);
+  }
+  function cancelEditCategory() {
+    if (editingCategorySaving) return;
+    setEditingCategoryEntryId(null);
+    setEditingCategoryText("");
+  }
+  /**
+   * 입력 텍스트 → CATEGORIES 매칭. label/id 완전 일치 > label prefix unique > label substring unique.
+   * 모호하거나 미일치 시 null (사용자에게 후보 칩으로 유도).
+   */
+  function resolveCategoryInput(input: string): { id: string; label: string } | null {
+    const q = input.trim();
+    if (!q) return null;
+    const exact = CATEGORIES.find((c) => c.label === q || c.id === q);
+    if (exact) return { id: exact.id, label: exact.label };
+    const prefix = CATEGORIES.filter((c) => c.label.startsWith(q));
+    if (prefix.length === 1) return { id: prefix[0].id, label: prefix[0].label };
+    const sub = CATEGORIES.filter((c) => c.label.includes(q));
+    if (sub.length === 1) return { id: sub[0].id, label: sub[0].label };
+    return null;
+  }
+  async function commitCategory(entryId: string, newCategoryId: string, currentCategoryId: string) {
+    if (newCategoryId === currentCategoryId) {
+      cancelEditCategory();
+      return;
+    }
+    setEditingCategorySaving(true);
+    try {
+      // category 만 송신 — PATCH route 가 자동으로 categorySource='manual' 채움 (B안).
+      const res = await fetch(`/api/entries/${entryId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: newCategoryId }),
+      });
+      if (res.ok) {
+        setEditingCategoryEntryId(null);
+        setEditingCategoryText("");
+        refreshDateEntries();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "분류 변경 실패");
+      }
+    } finally {
+      setEditingCategorySaving(false);
+    }
+  }
+  async function saveInlineCategory(entryId: string, currentCategoryId: string) {
+    const resolved = resolveCategoryInput(editingCategoryText);
+    if (!resolved) {
+      alert("일치하는 분류가 없거나 모호합니다. 후보 연번을 누르거나 정확한 이름을 입력하세요.");
+      return;
+    }
+    await commitCategory(entryId, resolved.id, currentCategoryId);
+  }
+  /** 주소 인라인 편집 — vigil 220a22b 미러. anon-patterns "주소 추정" 다이얼로그는 제외 */
+  function startEditAddress(entryId: string, current: string | null) {
+    if (editingAddressSaving) return;
+    setEditingAddressEntryId(entryId);
+    setEditingAddressText(current || "");
+  }
+  function cancelEditAddress() {
+    if (editingAddressSaving) return;
+    setEditingAddressEntryId(null);
+    setEditingAddressText("");
+  }
+  async function saveInlineAddress(entryId: string, original: string | null) {
+    if (editingAddressSaving) return;
+    const trimmed = editingAddressText.trim();
+    const before = (original || "").trim();
+    if (trimmed === before) {
+      cancelEditAddress();
+      return;
+    }
+    setEditingAddressSaving(true);
+    try {
+      const res = await fetch(`/api/entries/${entryId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ addressText: trimmed || null }),
+      });
+      if (res.ok) {
+        cancelEditAddress();
+        refreshDateEntries();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "주소 저장 실패");
+      }
+    } finally {
+      setEditingAddressSaving(false);
+    }
+  }
+
+  /** B안 — AI 추천 분류 1클릭 확정 (categorySource='suggested' → 'confirmed') */
+  async function confirmSuggestedCategory(entryId: string) {
+    if (editingCategorySaving) return;
+    setEditingCategorySaving(true);
+    try {
+      const res = await fetch(`/api/entries/${entryId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ categorySource: "confirmed" }),
+      });
+      if (res.ok) {
+        refreshDateEntries();
+      } else {
+        alert("확정 실패");
+      }
+    } finally {
+      setEditingCategorySaving(false);
+    }
   }
 
   async function deleteSelected() {
@@ -621,9 +749,24 @@ export default function DashboardPage() {
                   ? `${dateEntries.entries.filter((e) => e.category === categoryFilter).length}건 / ${dateEntries.entries.length}건`
                   : `${dateEntries.entries.length}건`}
               </span>
-              <div className="flex gap-2 items-center">
+              <div className="flex gap-2 items-center flex-wrap">
                 {selecting ? (
                   <>
+                    {/* 선택 모드 진입 직후 바로 옆에 전체선택 노출 (스크롤 없이 즉시 접근) */}
+                    {dateEntries.entries.length > 1 && (() => {
+                      const selectable = dateEntries.entries
+                        .filter((x) => me?.role === "ADMIN" || x.userId === me?.id)
+                        .map((x) => x.id);
+                      const allOn = selectable.length > 0 && selectedIds.length === selectable.length;
+                      return (
+                        <button
+                          onClick={() => setSelectedIds(allOn ? [] : selectable)}
+                          className="text-xs px-2 py-0.5 rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                        >
+                          {allOn ? "전체 해제" : "전체 선택"}
+                        </button>
+                      );
+                    })()}
                     <button onClick={downloadSelected}
                       disabled={selectedIds.length === 0 || downloading === "selected"}
                       className="text-xs text-emerald-600 disabled:opacity-30">
@@ -650,13 +793,11 @@ export default function DashboardPage() {
                         </button>
                       )
                     )}
-                    {me?.role === "ADMIN" && (
-                      <button onClick={deleteSelected}
-                        disabled={selectedIds.length === 0}
-                        className="text-xs text-red-500 disabled:opacity-30">
-                        {selectedIds.length}건 삭제
-                      </button>
-                    )}
+                    <button onClick={deleteSelected}
+                      disabled={selectedIds.length === 0}
+                      className="text-xs text-red-500 disabled:opacity-30">
+                      {selectedIds.length}건 삭제
+                    </button>
                     <button onClick={() => { setSelecting(false); setSelectedIds([]); setMoveDate(null); }}
                       className="text-xs text-gray-400">취소</button>
                   </>
@@ -743,7 +884,7 @@ export default function DashboardPage() {
                     <article
                       key={e.id}
                       className={`bg-white rounded-xl border p-4 flex flex-col md:flex-row gap-4 items-start ${
-                        isChecked ? "border-blue-500 ring-2 ring-blue-200" : "border-gray-200"
+                        isChecked ? "border-emerald-500 ring-2 ring-emerald-200" : "border-gray-200"
                       }`}
                     >
                       {/* 좌측: 메타 — 박스 자체가 상세 진입 */}
@@ -764,7 +905,7 @@ export default function DashboardPage() {
                             disabled={!canSelect}
                             className={`px-2 py-0.5 rounded text-xs font-bold transition-colors ${
                               isChecked
-                                ? "bg-blue-600 text-white"
+                                ? "bg-emerald-600 text-white"
                                 : "bg-emerald-700 text-white hover:bg-emerald-600"
                             } disabled:opacity-50`}
                             title={canSelect ? "클릭하면 선택/해제 (다중 선택 가능)" : "권한 없음"}
@@ -779,13 +920,180 @@ export default function DashboardPage() {
                           </span>
                         </div>
                         <div className="text-[13px] space-y-0.5">
-                          <div>
+                          <div className="flex items-center flex-wrap gap-y-1">
                             <span className="text-gray-400 inline-block w-10 mr-1 text-[11px]">위치</span>
-                            <span className="text-gray-700">{loc || "(미입력)"}</span>
+                            {editingAddressEntryId === e.id ? (
+                              <>
+                                <input
+                                  autoFocus
+                                  value={editingAddressText}
+                                  onChange={(ev) => setEditingAddressText(ev.target.value)}
+                                  onKeyDown={(ev) => {
+                                    if (ev.key === "Enter") {
+                                      ev.preventDefault();
+                                      saveInlineAddress(e.id, e.addressText);
+                                    } else if (ev.key === "Escape") {
+                                      ev.preventDefault();
+                                      cancelEditAddress();
+                                    }
+                                  }}
+                                  onClick={(ev) => ev.stopPropagation()}
+                                  disabled={editingAddressSaving}
+                                  className="text-[13px] border border-amber-300 rounded px-1.5 py-0.5 min-w-[14rem] focus:outline-none focus:ring-2 focus:ring-amber-300 bg-white"
+                                  placeholder="도로명 주소 또는 위치 텍스트"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={(ev) => { ev.stopPropagation(); saveInlineAddress(e.id, e.addressText); }}
+                                  disabled={editingAddressSaving}
+                                  className="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                                >
+                                  {editingAddressSaving ? "저장 중..." : "저장"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(ev) => { ev.stopPropagation(); cancelEditAddress(); }}
+                                  disabled={editingAddressSaving}
+                                  className="ml-1 text-[10px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
+                                >
+                                  취소
+                                </button>
+                              </>
+                            ) : canSelect ? (
+                              <button
+                                type="button"
+                                onClick={(ev) => { ev.stopPropagation(); startEditAddress(e.id, e.addressText); }}
+                                className="text-gray-700 hover:bg-amber-50 hover:text-amber-800 rounded px-1 -mx-1 border border-transparent hover:border-amber-200 text-left"
+                                title="클릭하여 위치 수정"
+                              >
+                                {loc || "(미입력)"}
+                              </button>
+                            ) : (
+                              <span className="text-gray-700">{loc || "(미입력)"}</span>
+                            )}
                           </div>
-                          <div>
-                            <span className="text-gray-400 inline-block w-10 mr-1 text-[11px]">분류</span>
-                            <span className="text-gray-700">{catLabel} · 사진 {e.photoCount}장</span>
+                          <div className="flex items-start flex-wrap gap-y-1">
+                            <span className="text-gray-400 inline-block w-10 mr-1 text-[11px] pt-0.5">분류</span>
+                            {editingCategoryEntryId === e.id ? (
+                              <div className="flex flex-col gap-1 min-w-0">
+                                <div className="flex items-center flex-wrap gap-1">
+                                  <input
+                                    autoFocus
+                                    value={editingCategoryText}
+                                    onChange={(ev) => setEditingCategoryText(ev.target.value)}
+                                    onKeyDown={(ev) => {
+                                      if (ev.key === "Enter") {
+                                        ev.preventDefault();
+                                        saveInlineCategory(e.id, e.category);
+                                      } else if (ev.key === "Escape") {
+                                        ev.preventDefault();
+                                        cancelEditCategory();
+                                      }
+                                    }}
+                                    onClick={(ev) => ev.stopPropagation()}
+                                    disabled={editingCategorySaving}
+                                    className="text-[13px] border border-amber-300 rounded px-1.5 py-0.5 w-[10rem] focus:outline-none focus:ring-2 focus:ring-amber-300 bg-white"
+                                    placeholder="가로등, 녹지(수목)..."
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={(ev) => { ev.stopPropagation(); saveInlineCategory(e.id, e.category); }}
+                                    disabled={editingCategorySaving}
+                                    className="text-[10px] px-1.5 py-0.5 rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                                  >
+                                    {editingCategorySaving ? "저장 중..." : "저장"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(ev) => { ev.stopPropagation(); cancelEditCategory(); }}
+                                    disabled={editingCategorySaving}
+                                    className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
+                                  >
+                                    취소
+                                  </button>
+                                  {(() => {
+                                    const trimmed = editingCategoryText.trim();
+                                    if (!trimmed) return null;
+                                    const resolved = resolveCategoryInput(trimmed);
+                                    if (!resolved || resolved.label === trimmed) return null;
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={(ev) => { ev.stopPropagation(); commitCategory(e.id, resolved.id, e.category); }}
+                                        disabled={editingCategorySaving}
+                                        className="text-[11px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 disabled:opacity-50"
+                                        title={`클릭/Enter 로 "${resolved.label}" 적용`}
+                                      >
+                                        → {resolved.label}
+                                      </button>
+                                    );
+                                  })()}
+                                </div>
+                                {/* 같은 날짜 다른 entry 분류 후보 — 시간순(연번순), 카테고리 중복 제거 */}
+                                {(() => {
+                                  const seen = new Set<string>([e.category]);
+                                  const candidates: Array<{ seqNo: number; catId: string; label: string }> = [];
+                                  dateEntries.entries.forEach((other, idx) => {
+                                    if (other.id === e.id) return;
+                                    if (seen.has(other.category)) return;
+                                    seen.add(other.category);
+                                    candidates.push({
+                                      seqNo: idx + 1,
+                                      catId: other.category,
+                                      label: CATEGORY_MAP[other.category]?.label || other.category,
+                                    });
+                                  });
+                                  if (candidates.length === 0) return null;
+                                  return (
+                                    <div className="flex items-center flex-wrap gap-1 mt-0.5">
+                                      <span className="text-[10px] text-gray-400 shrink-0">후보:</span>
+                                      {candidates.map(({ seqNo, catId, label }) => (
+                                        <button
+                                          key={catId}
+                                          type="button"
+                                          onClick={(ev) => { ev.stopPropagation(); commitCategory(e.id, catId, e.category); }}
+                                          disabled={editingCategorySaving}
+                                          className="text-[11px] px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 disabled:opacity-50"
+                                          title={`연번 ${seqNo} 의 분류 "${label}" 적용`}
+                                        >
+                                          <span className="font-bold mr-0.5">{seqNo}</span>{label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+                            ) : canSelect ? (
+                              <div className="flex items-center gap-1 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={(ev) => { ev.stopPropagation(); startEditCategory(e.id, e.category); }}
+                                  className="text-gray-700 hover:bg-amber-50 hover:text-amber-800 rounded px-1 -mx-1 border border-transparent hover:border-amber-200 text-left"
+                                  title="클릭하여 분류 수정"
+                                >
+                                  {catLabel} · 사진 {e.photoCount}장
+                                </button>
+                                {/* B안 — AI 추천 1클릭 확정 */}
+                                {e.categorySource === "suggested" && (
+                                  <button
+                                    type="button"
+                                    onClick={(ev) => { ev.stopPropagation(); confirmSuggestedCategory(e.id); }}
+                                    disabled={editingCategorySaving}
+                                    className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+                                    title="AI 추천 분류 확정 — 사용자가 검토했음을 표시"
+                                  >
+                                    ✓ 확정
+                                  </button>
+                                )}
+                                {e.categorySource === "suggested" && (
+                                  <span className="text-[10px] text-amber-600" title="AI 추천 — 검토 필요">
+                                    추천
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-gray-700">{catLabel} · 사진 {e.photoCount}장</span>
+                            )}
                           </div>
                           <div>
                             <span className="text-gray-400 inline-block w-10 mr-1 text-[11px]">담당</span>
@@ -904,15 +1212,6 @@ export default function DashboardPage() {
               );
             })()}
 
-            {/* 전체 선택/해제 */}
-            {selecting && dateEntries.entries.length > 1 && (
-              <button onClick={() => {
-                const selectable = dateEntries.entries.filter((e) => me?.role === "ADMIN" || e.userId === me?.id).map((e) => e.id);
-                setSelectedIds(selectedIds.length === selectable.length ? [] : selectable);
-              }} className="text-xs text-emerald-600 mt-2">
-                {selectedIds.length === dateEntries.entries.filter((e) => me?.role === "ADMIN" || e.userId === me?.id).length ? "전체 해제" : "전체 선택"}
-              </button>
-            )}
           </>
         )}
       </div>

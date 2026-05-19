@@ -57,7 +57,7 @@ export default function ZonesPage() {
   const [showForm, setShowForm] = useState(false);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [tab, setTab] = useState<string>("all");
-  const [view, setView] = useState<"list" | "map" | "daily">("map");
+  const [view, setView] = useState<"list" | "map" | "daily">("daily");
   const [mapMarkers, setMapMarkers] = useState<MapMarker[]>([]);
   const [geocoding, setGeocoding] = useState(false);
   const [candMapAddress, setCandMapAddress] = useState<{ address: string; title: string } | null>(null);
@@ -491,6 +491,37 @@ export default function ZonesPage() {
         <div className="space-y-3">
           {/* 날짜 범위 + 카테고리 필터 */}
           <div className="flex items-center gap-2 flex-wrap">
+            {/* 기간 빠른 선택 — KST 기준 N일 이전 ~ 오늘 */}
+            {(() => {
+              const ksToday = todayKr();
+              const ksDaysAgo = (n: number) => {
+                const d = new Date(ksToday + "T12:00:00");
+                d.setDate(d.getDate() - n);
+                return d.toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
+              };
+              const presets: { label: string; days: number }[] = [
+                { label: "오늘", days: 0 },
+                { label: "일주일", days: 6 },
+                { label: "한달", days: 29 },
+              ];
+              return presets.map(({ label, days }) => {
+                const start = days === 0 ? ksToday : ksDaysAgo(days);
+                const active = dailyStart === start && dailyEnd === ksToday;
+                return (
+                  <button
+                    key={label}
+                    onClick={() => { setDailyStart(start); setDailyEnd(ksToday); setDailyCatFilter(null); }}
+                    className={`text-[11px] px-2 py-1 rounded-md border ${
+                      active
+                        ? "bg-emerald-600 text-white border-emerald-600"
+                        : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              });
+            })()}
             <input
               type="date"
               value={dailyStart}
